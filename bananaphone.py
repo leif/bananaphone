@@ -69,7 +69,9 @@ and --abridged which will remove all states from the model which do not lead to
 complete hash spaces. If --abridged is not used, the markov encoder will
 sometimes have no matching next token and will need to fall back to using the
 random model. If -v is specified prior to the command, the rate of model
-adherence is written to stderr periodically.
+adherence is written to stderr periodically. With a 3MB corpus of about a half
+million words (~50000 unique), at 2 bits per word (as per the SSH example
+below) the unabridged model is adhered to about 90% of the time.
 
 
 EXAMPLE USAGE:
@@ -80,11 +82,11 @@ encode "Hello\n" at 13 bits per word, using a dictionary and random picker:
 decode "Hello\n" from 13-bit words:
     echo "discombobulate aspens brawler Gödel's" | ./bananaphone.py rh_decoder words,sha1,13
 
-start a proxy listener for $sshhost, using an abridged first-order markov encoder with 1 bit per word:
-    socat TCP4-LISTEN:1234,fork EXEC:'bash -c "./bananaphone.py\\ rh_decoder\\ words,sha1,1|socat\\ TCP4\:$sshhost\:22\\ -|./bananaphone.py\\ rh_encoder\\ words,sha1,1\\ markov\\ corpus.txt\\ 1\\ --abridged"'
+start a proxy listener for $sshhost, using markov encoder with 2 bits per word:
+    socat TCP4-LISTEN:1234,fork EXEC:'bash -c "./bananaphone.py\\ rh_decoder\\ words,sha1,2|socat\\ TCP4\:'$sshhost'\:22\\ -|./bananaphone.py\\ -v\\ rh_encoder\\ words,sha1,2\\ markov\\ corpus.txt"'
 
 connect to the ssh host through the $proxyhost:
-    ssh user@host -oProxyCommand="./bananaphone.py rh_encoder words,sha1,1 markov corpus.txt|socat TCP4:$proxyhost:1234 -|./bananaphone.py rh_decoder words,sha1,1"
+    ssh user@host -oProxyCommand="./bananaphone.py rh_encoder words,sha1,2 markov corpus.txt|socat TCP4:$proxyhost:1234 -|./bananaphone.py rh_decoder words,sha1,2"
 """
 
 __author__    = "Leif Ryge <leif@synthesize.us>"
