@@ -108,6 +108,8 @@ maintaining low enough latency to estabish TCP connections.
 
 TODO:
 * add stream cipher
+** hammertime needs one to be at all useful. TLS would be fine.
+** RH encoding needs an indistinguishable one to provide more than obfuscation.
 * document hammertime usage
 * implement Tor pluggable transport spec
 """
@@ -120,7 +122,7 @@ from random      import choice, randrange
 from hashlib     import md5, sha1, sha224, sha256, sha384, sha512
 from itertools   import islice, imap
 from collections import deque
-from cocotools   import cmap, cfilter, coroutine, composable, cdebug, cmapstar, tee, concurrent, concurrentWithQueueAccess, pv
+from cocotools   import cmap, cfilter, coroutine, composable, cdebug, cmapstar, tee, coThreadWithQueueAccess, pv
 
 HASHES  = [ md5, sha1, sha224, sha256, sha384, sha512 ]
 GLOBALS = globals()
@@ -515,7 +517,7 @@ def rh_print_corpus_stats ( encodingSpec, corpusFilename, order=1 ):
 
 from Queue import Empty
 
-@concurrentWithQueueAccess
+@coThreadWithQueueAccess
 def hammertime_encoder ( queue, target ):
     """
     This adds chaff to a bytestream to impede passive timing analysis.
@@ -713,7 +715,17 @@ def rh_server( encodingSpec, model, filename, *modelArgs ):
 
 
 @appendTo( CODECS )
-def hammertime_hash_server ( encodingSpec="words,sha1,13", model="random", filename="/usr/share/dict/words", *modelArgs ):
+def hammertime_client( ):
+    return toBytes | hammertime_encoder, toBytes | hammertime_decoder
+
+
+@appendTo( CODECS )
+def hammertime_server( ):
+    return toBytes| hammertime_decoder, toBytes | hammertime_encoder
+
+
+@appendTo( CODECS )
+def hammertime_rh_server ( encodingSpec="words,sha1,13", model="random", filename="/usr/share/dict/words", *modelArgs ):
     return hammertime_encoder | rh_encoder( encodingSpec, model, filename, *modelArgs ), \
            rh_decoder( encodingSpec ) | hammertime_decoder
 
@@ -728,6 +740,7 @@ class usage ( composable ):
                 raise
         composable.__init__( self, _command )
 
+
 @register( COMMANDS, 'tcp_proxy' )
 @usage
 def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
@@ -740,6 +753,11 @@ def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
 
     from twisted.protocols import basic
     from twisted.internet  import reactor, protocol, defer
+
+    def callFromThreadWrapper( fn ):
+        def _callFromThreadWrapper( *args, **kwargs ):
+            reactor.callFromThread( fn, *args, **kwargs )
+        return _callFromThreadWrapper
 
     class ByteSinkProtocol ( protocol.Protocol ):
 
@@ -765,7 +783,8 @@ def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
         def __init__(self, proxyServer ):
             self.proxyServer = proxyServer
 
-        def clientConnectionFailed( self ):
+        def clientConnectionFailed( self, connector, reason ):
+            debug( "Connection failed: %s %s" % (connector, reason) )
             self.proxyServer.transport.loseConnection()
 
 
@@ -779,8 +798,8 @@ def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
 
         def clientConnectionMade( self, client ):
             serverCoroutine, clientCoroutine = self.factory.codec
-            client.byteSink = clientCoroutine > self.transport.write
-            self.byteSink   = serverCoroutine > client.transport.write
+            client.byteSink = clientCoroutine > callFromThreadWrapper( self.transport.write   )
+            self.byteSink   = serverCoroutine > callFromThreadWrapper( client.transport.write )
             self.loseRemoteConnection = client.transport.loseConnection
             client.loseRemoteConnection = self.transport.loseConnection
             self.transport.resumeProducing()

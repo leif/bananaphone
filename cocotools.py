@@ -11,8 +11,9 @@ __license__   = "WTFPL"
 import os
 import sys
 import time
-from multiprocessing import Process, Queue
-from Queue import Empty
+import Queue
+import threading
+import multiprocessing
 
 class composable ( object ):
     """function composition decorator
@@ -89,33 +90,35 @@ class coroutine ( composable ):
             results[:] = []
         target.close()
 
-class concurrent ( coroutine ):
-    """concurrent composable coroutine
-    If a function is decorated with concurrent instead of coroutine, it will be
-    run in another process and receive data via a multiprocessing.Queue. It
-    will execute its target (including anything it is composed with) in the same
-    other process. If it is turned into a generator using the '<' operator, its
-    output can be received in the first process (by way of another Queue).
+
+class QueueCoroutine ( coroutine ):
+    """Connect to a coroutine via a Queue
+    This allows a coroutine to run in another process or thread and receive
+    data via a Queue. It will execute its target (including anything it is
+    composed with) in the same other process.  If it is turned into a generator
+    using the '<' operator, its output can be received in the first process (by
+    way of another Queue).
     
     If you'd like your coroutine in the other process to be able to do something
-    while waiting for data, you can access the queue directly instead of yielding
-    for input by decorating your function with concurrentWithQueueAccess. In this
-    case, your function must take two arguments (queue, target) and can then
-    poll the queue with non-blocking or blocking-with-timeout calls to get().
+    while waiting for data, you can access the queue directly instead of
+    yielding for input by decorating your function with
+    co{Thread,Process}WithQueueAccess. In this case, your function must take
+    two arguments (queue, target) and can then poll the queue with non-blocking
+    or blocking-with-timeout calls to get().
 
     Note: the below doctest is somewhat fragile and will probably only pass if
     your computer wins/loses a race condition the same way as mine usually does.
 
-    >>> @concurrentWithQueueAccess
+    >>> @coProcessWithQueueAccess # also works with coThreadWithQueueAccess
     ... def countdown( queue, target ):
     ...   for i in range(5, 0,-1):
     ...     try:
     ...       value = queue.get( block=False )
-    ...     except Empty:
+    ...     except Queue.Empty:
     ...       value = 'Sleeping'
     ...     target.send( '%s: %s' % (i, value) )
     ...     time.sleep(0.01)
-    >>> queue = Queue()
+    >>> queue = type( countdown ).Queue( )
     >>> p = cmap( lambda x:x*3 ) | countdown > queue.put
     >>> p.send( 1 )
     >>> p.send( 2 )
@@ -132,6 +135,10 @@ class concurrent ( coroutine ):
     >>> queue.get()
     '1: 9'
     """
+
+    Queue           = NotImplemented 
+    ThreadOrProcess = NotImplemented
+
     def __init__ ( self, fn, withQueueAccess = False ):
         if fn.__name__ == 'composed':
             composable.__init__( self, fn )
@@ -148,8 +155,8 @@ class concurrent ( coroutine ):
                             break
                         target.send( value )
             def _queueWriter ( target ):
-                queue = Queue( 1000 )
-                p = Process( target=_queueReader, args=(queue, target) )
+                queue = self.Queue( 1000 )
+                p = self.ThreadOrProcess( target=_queueReader, args=(queue, target) )
                 p.start()
                 while True:
                     try:
@@ -166,19 +173,32 @@ class concurrent ( coroutine ):
         process; the concurrent coroutine (including anything after it in a
         pipeline) is not.
         """
-        results = Queue( )
+        results = self.Queue( )
         target = self > results.put
         for value in iterable:
             target.send( value )
             while True:
                 try:
                     yield results.get( block=False )
-                except Empty:
+                except Queue.Empty:
                     break
         target.close()
 
-def concurrentWithQueueAccess ( fn ):
-    return concurrent( fn, withQueueAccess = True )
+class coProcess ( QueueCoroutine ):
+    "QueueCoroutine using multiprocessing"
+    Queue           = staticmethod( multiprocessing.Queue   )
+    ThreadOrProcess = staticmethod( multiprocessing.Process )
+
+def coProcessWithQueueAccess ( fn ):
+    return coProcess( fn, withQueueAccess = True )
+
+class coThread ( QueueCoroutine ):
+    "QueueCoroutine using threading"
+    Queue           = staticmethod( Queue.Queue      )
+    ThreadOrProcess = staticmethod( threading.Thread )
+
+def coThreadWithQueueAccess ( fn ):
+    return coThread( fn, withQueueAccess = True )
 
 def tee ( targetOne ):
     @coroutine
@@ -188,6 +208,7 @@ def tee ( targetOne ):
             targetOne.send( value )
             targetTwo.send( value )
     return _tee
+
 
 def cfilter ( fn ):
     @coroutine
