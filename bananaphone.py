@@ -122,7 +122,7 @@ from random      import choice, randrange
 from hashlib     import md5, sha1, sha224, sha256, sha384, sha512
 from itertools   import islice, imap
 from collections import deque
-from cocotools   import cmap, cfilter, coroutine, composable, cdebug, cmapstar, tee, coThreadWithQueueAccess, pv
+from cocotools   import cmap, cfilter, coroutine, composable, cdebug, cmapstar, tee, coThread, pv
 
 HASHES  = [ md5, sha1, sha224, sha256, sha384, sha512 ]
 GLOBALS = globals()
@@ -517,7 +517,7 @@ def rh_print_corpus_stats ( encodingSpec, corpusFilename, order=1 ):
 
 from Queue import Empty
 
-@coThreadWithQueueAccess
+@coThread.withQueueAccess
 def hammertime_encoder ( queue, target ):
     """
     This adds chaff to a bytestream to impede passive timing analysis.
