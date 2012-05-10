@@ -15,19 +15,36 @@ import Queue
 import threading
 import multiprocessing
 
-class composable ( object ):
-    """function composition decorator
-    Decorate functions with this so you can write
-        a | b | c | d
-    instead of
-        lambda *args, **kwargs: a(b(c(d(*args,**kwargs))))
-    """
+class decorator ( object ):
+
+    "Base class for object-oriented function decorators"
 
     def __init__ ( self, fn ):
-        self._fn = fn
+        self._fn      = fn
+        self.__name__ = fn.__name__
 
     def __call__ ( self, *args, **kwargs ):
         return self._fn( *args, **kwargs )
+
+
+class composable ( decorator ):
+    """Function composition decorator.
+
+    Decorate functions with this so you can write
+        f = a | b | c | d
+    instead of
+        f = lambda *args, **kwargs: a(b(c(d(*args,**kwargs))))
+
+    >>> from random import randint
+    >>> a, b, c, d = [ # four random functions
+    ...     lambda x,a=randint(1,1000),b=randint(1,1000):x*a%b
+    ...     for i in range(4) ]
+    >>> e, f, g, h = map(composable,(a,b,c,d))
+    >>> f1 = lambda *args, **kwargs: a(b(c(d(*args,**kwargs))))
+    >>> f2 = e | f | g | h
+    >>> x = randint(1,1000)
+    >>> assert f1( x ) == f2( x )
+    """
 
     def __or__ ( self, other ):
         @type(self)
@@ -37,6 +54,7 @@ class composable ( object ):
 
 class coroutine ( composable ):
     """composable coroutine decorator
+
     >>> def ngram ( n ):
     ...    @coroutine
     ...    def _ngram ( target ):
@@ -99,9 +117,9 @@ class QueueCoroutine ( coroutine ):
     using the '<' operator, its output can be received in the first process (by
     way of another Queue).
     
-    If you'd like your coroutine in the other process to be able to do something
-    while waiting for data, you can access the queue directly instead of
-    yielding for input by decorating your function with
+    If you'd like your coroutine in the other process or thread to be able to
+    do something while waiting for data, you can access the queue directly
+    instead of yielding for input by decorating your function with
     co{Thread,Process}.withQueueAccess. In this case, your function must take
     two arguments (queue, target) and can then poll the queue with non-blocking
     or blocking-with-timeout calls to get().
@@ -114,11 +132,11 @@ class QueueCoroutine ( coroutine ):
     ...   for i in range(5, 0,-1):
     ...     try:
     ...       value = queue.get( block=False )
-    ...     except Queue.Empty:
+    ...     except coProcess.QueueEmpty:
     ...       value = 'Sleeping'
     ...     target.send( '%s: %s' % (i, value) )
     ...     time.sleep(0.01)
-    >>> queue = type( countdown ).Queue( )
+    >>> queue = type( countdown ).QueueClass( )
     >>> p = cmap( lambda x:x*3 ) | countdown > queue.put
     >>> p.send( 1 )
     >>> p.send( 2 )
@@ -136,8 +154,9 @@ class QueueCoroutine ( coroutine ):
     '1: 9'
     """
 
-    Queue           = NotImplemented 
+    QueueClass      = NotImplemented 
     ThreadOrProcess = NotImplemented
+    QueueEmpty      = Queue.Empty
 
     def __init__ ( self, fn, withQueueAccess = False ):
         if fn.__name__ == 'composed':
@@ -155,7 +174,7 @@ class QueueCoroutine ( coroutine ):
                             break
                         target.send( value )
             def _queueWriter ( target ):
-                queue = self.Queue( 1000 )
+                queue = self.QueueClass( 1000 )
                 p = self.ThreadOrProcess( target=_queueReader, args=(queue, target) )
                 p.start()
                 while True:
@@ -177,25 +196,25 @@ class QueueCoroutine ( coroutine ):
         process; the concurrent coroutine (including anything after it in a
         pipeline) is not.
         """
-        results = self.Queue( )
+        results = self.QueueClass( )
         target = self > results.put
         for value in iterable:
             target.send( value )
             while True:
                 try:
                     yield results.get( block=False )
-                except Queue.Empty:
+                except self.QueueEmpty:
                     break
         target.close()
 
 class coProcess ( QueueCoroutine ):
     "QueueCoroutine using multiprocessing"
-    Queue           = staticmethod( multiprocessing.Queue   )
+    QueueClass      = staticmethod( multiprocessing.Queue   )
     ThreadOrProcess = staticmethod( multiprocessing.Process )
 
 class coThread ( QueueCoroutine ):
     "QueueCoroutine using threading"
-    Queue           = staticmethod( Queue.Queue      )
+    QueueClass      = staticmethod( Queue.Queue      )
     ThreadOrProcess = staticmethod( threading.Thread )
 
 def tee ( targetOne ):
@@ -258,7 +277,7 @@ def cat ( target ):
         target.send( (yield) )
 
 def pv ( interval = 1, report = cat > sys.stderr.write ):
-    "Monitor the throughput of data through a pipeline"
+    "Monitor the throughput of data in a pipeline"
     @coroutine
     def _pv ( target ):
         count = 0

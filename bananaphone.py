@@ -63,23 +63,23 @@ below) the unabridged model is adhered to about 90% of the time.
 
 EXAMPLE USAGE:
 encode "Hello\n" at 13 bits per word, using a dictionary and random picker:
-    echo Hello | ./bananaphone.py pipeline 'rh_encoder("words,sha1,13", "random", "/usr/share/dict/words")'
+    echo Hello | ./bananaphone.py evaluate 'rh_encoder("words,sha1,13", "random", "/usr/share/dict/words")'
 
 decode "Hello\n" from 13-bit words:
-    echo "discombobulate aspens brawler Gödel's" | ./bananaphone.py pipeline 'rh_decoder("words,sha1,13")'
+    echo "discombobulate aspens brawler Gödel's" | ./bananaphone.py evaluate 'rh_decoder("words,sha1,13")'
 
 decode "Hello\n" from 13-bit words using the composable coroutine API:
     >>> "".join( str("discombobulate aspens brawler Gödel's\n") > rh_decoder("words,sha1,13") )
     'Hello\n'
 
 start a proxy listener for $sshhost, using markov encoder with 2 bits per word:
-    socat TCP4-LISTEN:1234,fork EXEC:'bash -c "./bananaphone.py\\ pipeline\\ rh_decoder(words,sha1,2)|socat\\ TCP4\:'$sshhost'\:22\\ -|./bananaphone.py\\ -v\\ rh_encoder\\ words,sha1,2\\ markov\\ corpus.txt"' # FIXME: shell quoting is broken in this example usage after moving to the pipeline model
+    socat TCP4-LISTEN:1234,fork EXEC:'bash -c "./bananaphone.py\\ evaluate\\ rh_decoder(words,sha1,2)|socat\\ TCP4\:'$sshhost'\:22\\ -|./bananaphone.py\\ -v\\ rh_encoder\\ words,sha1,2\\ markov\\ corpus.txt"' # FIXME: shell quoting is broken in this example usage after moving to the evaluate model
 
 same as above, but using bananaphone.tcp_proxy instead of socat as the server:
     python -m bananaphone tcp_proxy rh_server words,sha1,2 markov corpus.txt
 
 connect to the ssh host through the $proxyhost:
-    ssh user@host -oProxyCommand="./bananaphone.py pipeline 'rh_encoder((words,sha1,2),\"markov\",\"corpus.txt\")'|socat TCP4:$proxyhost:1234 -|./bananaphone.py pipeline 'rh_decoder((words,sha1,2))'"
+    ssh user@host -oProxyCommand="./bananaphone.py evaluate 'rh_encoder((words,sha1,2),\"markov\",\"corpus.txt\")'|socat TCP4:$proxyhost:1234 -|./bananaphone.py evaluate 'rh_decoder((words,sha1,2))'"
 
 === Hammertime encoding ===
 
@@ -110,25 +110,54 @@ TODO:
 * add stream cipher
 ** hammertime needs one to be at all useful. TLS would be fine.
 ** RH encoding needs an indistinguishable one to provide more than obfuscation.
+*** idea:
 * document hammertime usage
+* better CLI
 * implement Tor pluggable transport spec
 """
 
 __author__    = "Leif Ryge <leif@synthesize.us>"
 __copyright__ = "No Rights Reserved, Uncopyright 2012"
+__license__   = "WTFPL"
 
 import os, sys, time, readline
 from random      import choice, randrange
 from hashlib     import md5, sha1, sha224, sha256, sha384, sha512
 from itertools   import islice, imap
 from collections import deque
-from cocotools   import cmap, cfilter, coroutine, composable, cdebug, cmapstar, tee, coThread, pv
+from cocotools   import cmap, cfilter, coroutine, composable, cdebug, cmapstar, tee, coThread, pv, decorator
+from dryopt      import Command, Option
 
 HASHES  = [ md5, sha1, sha224, sha256, sha384, sha512 ]
 GLOBALS = globals()
 
 global verbose
 verbose = False
+
+def getGlobalOfType( typeWanted ):
+    def getter ( name, default = None ):
+        result = globals().get( name, default )
+        assert isinstance( result, typeWanted ), "'%s' is not one of %s" % ( name, listGlobalsOfType( typeWanted ) )
+        return result
+    return getter
+
+def listGlobalsOfType( typeWanted ):
+    return [ k for k,v in globals().items() if isinstance(v, typeWanted ) ]
+
+class Pipeline( Command ):
+    def commandline_call( self, args ):
+        coroutine = Command.commandline_call( self, args )
+        stdout = os.fdopen(sys.stdout.fileno(), 'w', 0) # do not want buffering
+        stdin  = os.fdopen(sys.stdin .fileno(), 'r', 0) # do not want buffering
+        target = coroutine > stdout.write
+        for byte in iter( lambda: stdin.read(1), '' ):
+            target.send( byte )
+        target.close()
+
+@Pipeline
+def evaluate ( expression=Option( parse=str, help="expression to evaluate" ) ):
+    "Evaluate an expression and run it as a pipeline between standard in and out"
+    return eval( expression )
 
 def debug ( message ):
     if verbose:
@@ -309,6 +338,7 @@ def truncateHash ( hash, bits ):
 def parseEncodingSpec ( encodingSpec ):
 
     if type( encodingSpec ) is tuple:
+        debug("parseEncodingSpec passing through tuple: %s" % encodingSpec)
         return encodingSpec
     
     tokenize, hash, bits = encodingSpec.split(",", 3)
@@ -321,6 +351,7 @@ def parseEncodingSpec ( encodingSpec ):
     assert hash     in HASHES, "hash function must be one of %s" % ( formatGlobalNames( HASHES     ), )
     assert bits > 0
 
+    debug("parsed encoding spec: %s" % ((tokenize, hash, bits),))
     return ( tokenize, hash, bits )
 
 
@@ -370,9 +401,16 @@ words3 = appendTo(TOKENIZERS)( streamTokenizer( " \n.,;?!" )
 MODELS = []
 
 @appendTo(MODELS)
-def markov ( tokenize, hash, bits, corpusFilename, order=1, abridged=None ):
+@Command
+def markov (
+        encodingSpec = Option( parse = parseEncodingSpec ),
+        corpusFile   = Option( parse = readTextFile      ),
+        order        = Option( default = 1               ),
+        abridged     = Option( parse = bool, default = False )
+        ):
+    tokenize, hash, bits = encodingSpec
     truncatedHash = truncateHash( hash, bits )
-    corpusTokens  = list( tokenize < readTextFile( corpusFilename ) )
+    corpusTokens  = list( tokenize < corpusFile )
     order         = int( order )
     randomModel   = buildWeightedRandomModel( corpusTokens, truncatedHash )
     percentFull   = getPercentFull( randomModel, bits )
@@ -425,10 +463,10 @@ def markov ( tokenize, hash, bits, corpusFilename, order=1, abridged=None ):
 
 
 @appendTo(MODELS)
-def random ( tokenize, hash, bits, corpusFilename ):
+def random ( tokenize, hash, bits, corpusFile ):
 
     truncatedHash = truncateHash( hash, bits )
-    corpusTokens  = list( tokenize < readTextFile( corpusFilename ) )
+    corpusTokens  = list( tokenize < readTextFile( corpusFile ) )
     model         = buildWeightedRandomModel( corpusTokens, truncatedHash )
     percentFull   = getPercentFull( model, bits )
     assert percentFull == 100, "not enough tokens for %s-bit hashing (%s%% there)" % (bits, percentFull)
@@ -441,41 +479,49 @@ def random ( tokenize, hash, bits, corpusFilename ):
     return encode
 
 
-PIPELINES = []
-
-@appendTo(PIPELINES)
+@Pipeline
 def rh_decoder ( encodingSpec ):
     tokenize, hash, bits = parseEncodingSpec( encodingSpec )
     return toBytes | tokenize | cmap( truncateHash( hash, bits ) ) | changeWordSize( bits, 8 ) | cmap( chr )
 
 
-@appendTo(PIPELINES)
-def rh_encoder ( encodingSpec, modelName, *args ):
+@Pipeline
+def rh_encoder (
+        encodingSpec = Option( parse = str          ),
+        model        = Option( parse = GLOBALS.get  ),
+        *args
+        ):
 
     tokenize, hash, bits = parseEncodingSpec( encodingSpec )
 
     model = GLOBALS.get( modelName )
     assert model in MODELS, "model must be one of %s, got %s" % ( formatGlobalNames( MODELS ), modelName )
 
-    encode = model( tokenize, hash, bits, *args )
+    encode = model( encodingSpec, *args )
     
     return toBytes | cmap(ord) | changeWordSize(8, bits) | cmap(encode)
 
 COMMANDS = {}
 
-@register( COMMANDS, 'rh_encoder_permuter' )
-def rh_encoder_permuter ( encodingSpec, modelName, corpusFilename, separator="0a", howMany=10**6, *args ):
+@Command
+def rh_encoder_permuter (
+        encodingSpec    = Option( parse = parseEncodingSpec ) ,
+        model           = Option( parse = GLOBALS.get       ) ,
+        corpusFile      = Option( parse = readTextFile      ) ,
+        separator       = Option( default = "0a"            ) ,
+        howMany         = Option( default = 10**6           ) ,
+        *args
+        ):
 
     "Encode the same input many times."
 
-    tokenize, hash, bits = parseEncodingSpec( encodingSpec )
+    tokenize, hash, bits = encodingSpec
     truncatedHash = truncateHash( hash, bits )
     separator = int( separator, 16 )
 
-    model = GLOBALS.get( modelName )
     assert model in MODELS, "model must be one of %s, got %s" % ( formatGlobalNames( MODELS ), modelName )
     
-    corpusTokens = list( tokenize < readTextFile( corpusFilename ) )
+    corpusTokens = list( tokenize < corpusFile )
 
     encode = model( corpusTokens, truncatedHash, bits, *args )
 
@@ -487,12 +533,15 @@ def rh_encoder_permuter ( encodingSpec, modelName, corpusFilename, separator="0a
     
     return process
 
+@Command
+def rh_print_corpus_stats (
+        encodingSpec    = Option( parse = parseEncodingSpec ),
+        corpusFile  = Option( parse = readTextFile      ),
+        order           = Option( default = 1 )
+        ):
 
-@register( COMMANDS, 'rh_print_corpus_stats' )
-def rh_print_corpus_stats ( encodingSpec, corpusFilename, order=1 ):
-
-    tokenize, hash, bits = parseEncodingSpec( encodingSpec )
-    corpusTokens = list( tokenize < readTextFile( corpusFilename ) )
+    tokenize, hash, bits = encodingSpec
+    corpusTokens = list( tokenize < readTextFile( corpusFile ) )
 
     print "%s tokens, %s unique" % ( len(corpusTokens), len(set(corpusTokens)) )
 
@@ -515,51 +564,56 @@ def rh_print_corpus_stats ( encodingSpec, corpusFilename, order=1 ):
             break
 
 
-from Queue import Empty
-
-@coThread.withQueueAccess
-def hammertime_encoder ( queue, target ):
+@Pipeline
+def hammertime_encoder():
     """
-    This adds chaff to a bytestream to impede passive timing analysis.
+    Adds chaff to a bytestream to impede passive timing analysis.
     """
-    while True:
-        finished = False
-        data = []
+    @coThread.withQueueAccess
+    def _hammertime_encoder( queue, target ):
         while True:
-            try:
-                value = queue.get( block=False )
-                if value == '':
-                    finished = True
+            finished = False
+            data = []
+            while True:
+                try:
+                    value = queue.get( block=False )
+                    if value == '':
+                        finished = True
+                        break
+                    else:
+                        data.append( value )
+                except coThread.QueueEmpty:
                     break
-                else:
-                    data.append( value )
-            except Empty:
-                break
-        dataLen = len( data )
-        while dataLen > 0:
-            frameSize = min( dataLen, 127 )
-            target.send( chr( frameSize ) + "".join(data[:frameSize] ))
-            data    = data[frameSize:]
             dataLen = len( data )
-        else:
-            target.send( chr(0xFF)+" "*127 )
-        if finished:
-            break
+            while dataLen > 0:
+                frameSize = min( dataLen, 127 )
+                target.send( chr( frameSize ) + "".join(data[:frameSize] ))
+                data    = data[frameSize:]
+                dataLen = len( data )
+            else:
+                target.send( chr(0xFF)+" "*127 )
+            if finished:
+                break
+    return _hammertime_encoder
 
-@coroutine
-def hammertime_decoder ( target ):
+@Pipeline
+def hammertime_decoder():
     """
-    This removes hammertime_encoder's chaff.
+    Removes hammertime_encoder's chaff.
     """
-    while True:
-        frameHeader = ord( (yield) )
-        frameType   = frameHeader & 128
-        frameLength = frameHeader & 127
-        debug ("Frame type %s length %s" % (frameType, frameLength))
-        for i in range(0, frameLength):
-            byte = yield
-            if frameType == 0:
-                target.send( byte )
+    @coroutine
+    def _hammertime_decoder ( target ):
+        while True:
+            frameHeader = ord( (yield) )
+            frameType   = frameHeader & 128
+            frameLength = frameHeader & 127
+            debug ("Frame type %s length %s" % (frameType, frameLength))
+            for i in range(0, frameLength):
+                byte = yield
+                if frameType == 0:
+                    target.send( byte )
+    return _hammertime_decoder
+
 
 def throttle ( bps ):
     "Throttles, but not quite how much you ask it to yet. FIXME"
@@ -580,10 +634,13 @@ def throttle ( bps ):
     return _throttle
 
 
-@register( COMMANDS, 'httpd_chooser' )
-def httpd_chooser ( encodingSpec   = 'words,sha1,12',
-            corpusFilename = '/usr/share/dict/words',
-            port           = 8000
+@Command
+def httpd_chooser (
+            encodingSpec   = Option(   parse = parseEncodingSpec,
+                                     default = 'words,sha1,12' ),
+            corpusFile = Option(   parse = readTextFile,
+                                     default = '/usr/share/dict/words' ),
+            port           = Option( default = 8000 )
             ):
     "Web UI for browsing available words which can encode a target value."
 
@@ -591,9 +648,9 @@ def httpd_chooser ( encodingSpec   = 'words,sha1,12',
     from urllib2        import urlparse
 
     serverAddress = ( '', int(port) )
-    tokenize, hash, bits = parseEncodingSpec( encodingSpec )
+    tokenize, hash, bits = encodingSpec
     truncatedHash = truncateHash( hash, bits )
-    corpusTokens  = list( tokenize < readTextFile( corpusFilename ) )
+    corpusTokens  = list( tokenize < corpusFile )
     debug( "Building model from %s tokens" % (len(corpusTokens),) )
     model         = buildWeightedRandomModel( corpusTokens, truncatedHash )
     percentFull   = getPercentFull( model, bits )
@@ -619,7 +676,7 @@ def httpd_chooser ( encodingSpec   = 'words,sha1,12',
 @register( COMMANDS, 'tab_composer' )
 def tab_composer ( 
             encodingSpec   = 'words,sha1,2',
-            corpusFilename = 'corpus.txt',
+            corpusFile = 'corpus.txt',
             order          = 1,
             ):
     """readline tab completion through a markov model encoder"""
@@ -627,7 +684,7 @@ def tab_composer (
     tokenize, hash, bits = parseEncodingSpec( encodingSpec )
     truncatedHash = truncateHash( hash, bits )
     debug( "Tokenizing corpus" )
-    corpusTokens  = list( tokenize < readTextFile( corpusFilename ) )
+    corpusTokens  = list( tokenize < readTextFile( corpusFile ) )
     debug( "Building random model" )
     randomModel   = buildWeightedRandomModel( corpusTokens, truncatedHash )
     percentFull   = getPercentFull( randomModel, bits )
@@ -688,66 +745,46 @@ def tab_composer (
     raw_input( )
 
 
-@register( COMMANDS, 'pipeline' )
-def pipeline ( expression ):
-    "connect stdin to stdout through a coroutine (evaluated from the given expression)"
-    stdout = os.fdopen(sys.stdout.fileno(), 'w', 0) # do not want buffering
-    stdin  = os.fdopen(sys.stdin .fileno(), 'r', 0) # do not want buffering
-    coroutine = eval( expression )
-    target = coroutine > stdout.write
-    for byte in iter( lambda: stdin.read(1), '' ):
-        target.send( byte )
-    target.close()
+class Codec( decorator ): pass
 
-
-CODECS = [] # A "codec" is a function that returns a pair of coroutines
-
-@appendTo( CODECS )
+@Codec
 def rh_client( encodingSpec, model, filename, *modelArgs ):
     return rh_encoder( encodingSpec, model, filename, *modelArgs ), \
            rh_decoder( encodingSpec )
 
 
-@appendTo( CODECS )
+@Codec
 def rh_server( encodingSpec, model, filename, *modelArgs ):
     return rh_decoder( encodingSpec ), \
            rh_encoder( encodingSpec, model, filename, *modelArgs )
 
 
-@appendTo( CODECS )
+@Codec
 def hammertime_client( ):
     return toBytes | hammertime_encoder, toBytes | hammertime_decoder
 
 
-@appendTo( CODECS )
+@Codec
 def hammertime_server( ):
     return toBytes| hammertime_decoder, toBytes | hammertime_encoder
 
 
-@appendTo( CODECS )
+@Codec
 def hammertime_rh_server ( encodingSpec="words,sha1,13", model="random", filename="/usr/share/dict/words", *modelArgs ):
     return hammertime_encoder | rh_encoder( encodingSpec, model, filename, *modelArgs ), \
            rh_decoder( encodingSpec ) | hammertime_decoder
 
-
-class usage ( composable ):
-    def __init__ ( self, fn ):
-        def _command( *args, **kwargs ):
-            try:
-                return fn( *args, **kwargs )
-            except TypeError:
-                print fn.__doc__.format(globals=globals())
-                raise
-        composable.__init__( self, _command )
-
-
-@register( COMMANDS, 'tcp_proxy' )
-@usage
-def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
+@Command
+def tcp_proxy (
+        listenPort   = Option( parse = int, help = "TCP port number to listen on"   ),
+        destHostPort = Option( parse = str, help = "host:port to connect to"        ),
+        codecName    = Option( parse = getGlobalOfType( Codec ), help = ("name of encoder/decoder pair to use, one of %s" % listGlobalsOfType( Codec ) )),
+        *args
+        ):
     """
-    listenPort   - TCP port number to listen on
-    destHostPort - host:port to connect to
-    codecName    - name of encoder/decoder pair to use
+    listenPort   - 
+    destHostPort - 
+    codecName    - 
     codecArgs    - codec parameters
     """
 
@@ -823,13 +860,18 @@ def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
     reactor.listenTCP( int(listenPort), ProxyServerFactory( destHostPort, codec(*args) ) )
     reactor.run()
 
-
-@register( COMMANDS, 'test' )
-def test( verbose=None ):
+@Command
+def test( verbose=Option(parse=bool, default=False) ):
     import doctest
     doctest.testmod( verbose=verbose )
 
-@usage
+@Command
+def help( *args ):
+    if len(args) == 1:
+        print args[0], getGlobalOfType( Command )( args[0] ).desc
+    else:
+        print "Available commands:\n  %s" % ( "\n  ".join( listGlobalsOfType( Command ) ))
+
 def main ( progname, command=None, *argv ):
     
     progname = os.path.basename( progname )
@@ -841,24 +883,19 @@ def main ( progname, command=None, *argv ):
         verbose = True
         command = argv.pop(0)
 
-#    command = GLOBALS.get( command, None )
+    try:
+        result = globals().get(command, help).commandline_call( argv )
 
-    if command in COMMANDS:
+    except Exception, e:
 
-        try:
-            result = COMMANDS[command]( *argv )
+        if verbose:
+            raise
 
-        except Exception, e:
+        result =  "%s: %s" % ( type(e).__name__, e )
 
-            if verbose:
-                raise
-
-            result =  "%s: %s" % ( type(e).__name__, e )
-
-    else:
-        result = "usage: %s [-v] command tokenizationFunction,hashFunction,bitsPerWord [modelingFunction corpus [order [--abridged]]]\n" \
-                 "usage: %s [-v] %s,%s,integer [%s filename [integer [--abridged]]]" % (
-                     ( progname, progname ) + tuple( map( formatGlobalNames, ( TOKENIZERS, HASHES, MODELS ) ) ) )
+#        result = "usage: %s [-v] command tokenizationFunction,hashFunction,bitsPerWord [modelingFunction corpus [order [--abridged]]]\n" \
+#                 "usage: %s [-v] %s,%s,integer [%s filename [integer [--abridged]]]" % (
+#                     ( progname, progname ) + tuple( map( formatGlobalNames, ( TOKENIZERS, HASHES, MODELS ) ) ) )
 
     return result
 
