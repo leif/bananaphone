@@ -400,7 +400,7 @@ words3 = appendTo(TOKENIZERS)( streamTokenizer( " \n.,;?!" )
 
 MODELS = []
 
-@appendTo(MODELS)
+@appendTo(Model)
 @Command
 def markov (
         encodingSpec = Option( parse = parseEncodingSpec ),
@@ -505,11 +505,11 @@ COMMANDS = {}
 
 @Command
 def rh_encoder_permuter (
-        encodingSpec    = Option( parse = parseEncodingSpec ) ,
-        model           = Option( parse = GLOBALS.get       ) ,
-        corpusFile      = Option( parse = readTextFile      ) ,
-        separator       = Option( default = "0a"            ) ,
-        howMany         = Option( default = 10**6           ) ,
+        encodingSpec    = Option( parse = parseEncodingSpec        ),
+        model           = Option( parse = getGlobalOfType( Model ) ),
+        corpusFile      = Option( parse = readTextFile             ),
+        separator       = Option( default = "0a"                   ),
+        howMany         = Option( default = 10**6                  ),
         *args
         ):
 
@@ -519,8 +519,6 @@ def rh_encoder_permuter (
     truncatedHash = truncateHash( hash, bits )
     separator = int( separator, 16 )
 
-    assert model in MODELS, "model must be one of %s, got %s" % ( formatGlobalNames( MODELS ), modelName )
-    
     corpusTokens = list( tokenize < corpusFile )
 
     encode = model( corpusTokens, truncatedHash, bits, *args )
@@ -535,13 +533,27 @@ def rh_encoder_permuter (
 
 @Command
 def rh_print_corpus_stats (
-        encodingSpec    = Option( parse = parseEncodingSpec ),
-        corpusFile  = Option( parse = readTextFile      ),
-        order           = Option( default = 1 )
+        encodingSpec = Option(
+            help  = "encoding specification (see help parseEncodingSpec)",
+            parse = parseEncodingSpec,
+            ),
+        corpusFile = Option(
+            help  = "corpus filename (or - for stdin)",
+            parse = readTextFile,
+            ),
+        order = Option(
+            help    = "Order of the markov model",
+            default = 1,
+            )
         ):
 
+    """
+    Print the maximum number of RH encoding bits per token possible for a given
+    corpus and encoding spec using both markov and random models.
+    """
+
     tokenize, hash, bits = encodingSpec
-    corpusTokens = list( tokenize < readTextFile( corpusFile ) )
+    corpusTokens = list( tokenize < corpusFile )
 
     print "%s tokens, %s unique" % ( len(corpusTokens), len(set(corpusTokens)) )
 
@@ -636,11 +648,18 @@ def throttle ( bps ):
 
 @Command
 def httpd_chooser (
-            encodingSpec   = Option(   parse = parseEncodingSpec,
-                                     default = 'words,sha1,12' ),
-            corpusFile = Option(   parse = readTextFile,
-                                     default = '/usr/share/dict/words' ),
-            port           = Option( default = 8000 )
+            encodingSpec = Option(
+                help    = "encoding specification",
+                parse   = parseEncodingSpec,
+                default = 'words,sha1,12',
+                ),
+            corpusFile = Option(
+                parse   = readTextFile,
+                default = '/usr/share/dict/words',
+                ),
+            port = Option(
+                default = 8000,
+                )
             ):
     "Web UI for browsing available words which can encode a target value."
 
@@ -745,48 +764,52 @@ def tab_composer (
     raw_input( )
 
 
-class Codec( decorator ): pass
+class Codec( object ): pass
 
-@Codec
-def rh_client( encodingSpec, model, filename, *modelArgs ):
-    return rh_encoder( encodingSpec, model, filename, *modelArgs ), \
-           rh_decoder( encodingSpec )
+class rh_client( Codec ):
+    def __init__ ( self, encodingSpec, model, filename, *modelArgs ):
+        self.writer = rh_encoder( encodingSpec, model, filename, *modelArgs )
+        self.reader = rh_decoder( encodingSpec )
 
+class rh_server( Codec ):
+    def __init__ ( self, encodingSpec, model, filename, *modelArgs ):
+        self.writer = rh_decoder( encodingSpec )
+        self.reader = rh_encoder( encodingSpec, model, filename, *modelArgs )
 
-@Codec
-def rh_server( encodingSpec, model, filename, *modelArgs ):
-    return rh_decoder( encodingSpec ), \
-           rh_encoder( encodingSpec, model, filename, *modelArgs )
+class hammertime_client( Codec ):
+    writer = toBytes | hammertime_encoder
+    reader = toBytes | hammertime_decoder
 
+class hammertime_server( Codec ):
+    writer = toBytes | hammertime_decoder
+    reader = toBytes | hammertime_encoder
 
-@Codec
-def hammertime_client( ):
-    return toBytes | hammertime_encoder, toBytes | hammertime_decoder
+class rht_client ( Codec ):
+    def __init__ ( self, encodingSpec="words,sha1,13", model="random", filename="/usr/share/dict/words", *modelArgs ):
+        self.writer = hammertime_encoder | rh_encoder( encodingSpec, model, filename, *modelArgs )
+        self.reader = rh_decoder( encodingSpec ) | hammertime_decoder
 
-
-@Codec
-def hammertime_server( ):
-    return toBytes| hammertime_decoder, toBytes | hammertime_encoder
-
-
-@Codec
-def hammertime_rh_server ( encodingSpec="words,sha1,13", model="random", filename="/usr/share/dict/words", *modelArgs ):
-    return hammertime_encoder | rh_encoder( encodingSpec, model, filename, *modelArgs ), \
-           rh_decoder( encodingSpec ) | hammertime_decoder
+class rht_server ( Codec ):
+    def __init__ ( self, encodingSpec="words,sha1,13", model="random", filename="/usr/share/dict/words", *modelArgs ):
+        self.reader = hammertime_encoder | rh_encoder( encodingSpec, model, filename, *modelArgs )
+        self.writer = rh_decoder( encodingSpec ) | hammertime_decoder
 
 @Command
 def tcp_proxy (
-        listenPort   = Option( parse = int, help = "TCP port number to listen on"   ),
-        destHostPort = Option( parse = str, help = "host:port to connect to"        ),
-        codecName    = Option( parse = getGlobalOfType( Codec ), help = ("name of encoder/decoder pair to use, one of %s" % listGlobalsOfType( Codec ) )),
+        listenPort = Option(
+            help  = "TCP port number to listen on",
+            parse = int,
+            ),
+        destHostPort = Option(
+            help  = "host:port to connect to",
+            parse = str,
+            ),
+        codecName = Option(
+            help  = "name of encoder/decoder pair to use, one of %s" % listGlobalsOfType( Codec ),
+            parse = getGlobalOfType( Codec ),
+            ),
         *args
         ):
-    """
-    listenPort   - 
-    destHostPort - 
-    codecName    - 
-    codecArgs    - codec parameters
-    """
 
     from twisted.protocols import basic
     from twisted.internet  import reactor, protocol, defer
@@ -834,11 +857,10 @@ def tcp_proxy (
             reactor.connectTCP( host, int(port), ProxyClientFactory( self ) )
 
         def clientConnectionMade( self, client ):
-            serverCoroutine, clientCoroutine = self.factory.codec
-            client.byteSink = clientCoroutine > callFromThreadWrapper( self.transport.write   )
-            self.byteSink   = serverCoroutine > callFromThreadWrapper( client.transport.write )
+            client.byteSink = self.factory.codec.writer > callFromThreadWrapper( self.transport.write )
+            self.byteSink = self.factory.codec.reader > callFromThreadWrapper( client.transport.write )
             self.loseRemoteConnection = client.transport.loseConnection
-            client.loseRemoteConnection = self.transport.loseConnection
+            client.loseRemoteConnection = self.transport.loseConnection # bug? is this passing two selfs?
             self.transport.resumeProducing()
 
         def dataReceived(self, data):
@@ -854,8 +876,7 @@ def tcp_proxy (
             self.destHostPort = destHostPort
             self.codec        = codec
 
-    codec = GLOBALS.get( codecName )
-    assert codec in CODECS, "codec must be one of %s, got %s" % ( formatGlobalNames( CODECS ), codecName )
+    codec = getGlobalOfType( Codec )( codecName )
     
     reactor.listenTCP( int(listenPort), ProxyServerFactory( destHostPort, codec(*args) ) )
     reactor.run()
