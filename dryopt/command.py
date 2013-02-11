@@ -15,19 +15,17 @@ class Command (object):
         self.descriptors = ArgumentDescriptors(appfunc)
         self.desc = desc
 
-    @classmethod
-    def description( cls, desc ):
-        def decorator ( fn ):
-            return cls( fn, desc = desc )
-        return decorator
-
     @property
     def name(self):
         return self.target.__name__
 
     @property
     def usage(self):
-        return '<[Usage not implemented.]>'
+        width = max(map(len,self.descriptors.names)) + 3
+        return "\n".join(
+            ("--%-"+str(width)+"s=%s") % (name, name)
+            if self.descriptors.optmap[ name ].default == Option.NoDefault else ""
+            for name in self.descriptors.names )
 
     def __call__(self, *a, **kw):
         '''
@@ -43,7 +41,11 @@ class Command (object):
         for (name, value) in kw.items():
             if kwargs.has_key(name):
                 raise DuplicateArg(name, kwargs[name], value)
-            kwargs[name] = self.descriptors.optmap[name].parse( value )
+            try:
+                kwargs[name] = self.descriptors.optmap[name].parse( value )
+            except KeyError:
+                raise TypeError( "%s() got got an unexpected keyword argument %r" % ( self.name , name ) )
+
 
         # Defaults:
         for (name, opt) in self.descriptors.optmap.items():
@@ -57,7 +59,7 @@ class Command (object):
         argsgiven = len(kwargs)
         argsneeded = len(self.descriptors.names)
         if argsgiven < argsneeded:
-            raise TooFewArgs(self.descriptors.names[argsgiven:])
+            raise TooFewArgs(self.descriptors.names[:argsneeded - argsgiven])
 
         return self.target(*vargs, **kwargs)
 

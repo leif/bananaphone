@@ -17,7 +17,9 @@ import multiprocessing
 
 class decorator ( object ):
 
-    "Base class for object-oriented function decorators"
+    """
+    Base class for object-oriented function decorators.
+    """
 
     def __init__ ( self, fn ):
         self._fn      = fn
@@ -30,7 +32,7 @@ class decorator ( object ):
 class composable ( decorator ):
     """Function composition decorator.
 
-    Decorate functions with this so you can write
+    Decorate functions with this so that you can write
         f = a | b | c | d
     instead of
         f = lambda *args, **kwargs: a(b(c(d(*args,**kwargs))))
@@ -89,7 +91,7 @@ class coroutine ( composable ):
                 return g
             composable.__init__( self, _coroutine )
 
-    def __gt__ ( self, fn ):
+    def mapTo ( self, fn ):
         "Initialize coroutine with a callable as its sink"
         @coroutine
         def sink():
@@ -97,7 +99,9 @@ class coroutine ( composable ):
                 fn( (yield) )
         return self( sink() )
 
-    def __lt__ ( self, iterable ):
+    __gt__ = mapTo
+
+    def asGenerator ( self, iterable ):
         "Turn coroutine into a normal generator, pulling from another iterable"
         results = []
         target = self > results.append
@@ -108,8 +112,10 @@ class coroutine ( composable ):
             results[:] = []
         target.close()
 
+    __lt__ = asGenerator
 
-class QueueCoroutine ( coroutine ):
+
+class _queueCoroutine ( coroutine ):
     """Connect to a coroutine via a Queue
     This allows a coroutine to run in another process or thread and receive
     data via a Queue. It will execute its target (including anything it is
@@ -132,7 +138,7 @@ class QueueCoroutine ( coroutine ):
     ...   for i in range(5, 0,-1):
     ...     try:
     ...       value = queue.get( block=False )
-    ...     except coProcess.QueueEmpty:
+    ...     except Queue.Empty:
     ...       value = 'Sleeping'
     ...     target.send( '%s: %s' % (i, value) )
     ...     time.sleep(0.01)
@@ -156,7 +162,6 @@ class QueueCoroutine ( coroutine ):
 
     QueueClass      = NotImplemented 
     ThreadOrProcess = NotImplemented
-    QueueEmpty      = Queue.Empty
 
     def __init__ ( self, fn, withQueueAccess = False ):
         if fn.__name__ == 'composed':
@@ -189,12 +194,12 @@ class QueueCoroutine ( coroutine ):
     def withQueueAccess( cls, fn ):
         return cls( fn, withQueueAccess = True )
 
-    def __lt__ ( self, iterable ):
+    def asGenerator ( self, iterable ):
         """
         Turn concurrent coroutine into a normal generator, pulling from another
         iterable. The sending and receiving iterables operate in the calling
-        process; the concurrent coroutine (including anything after it in a
-        pipeline) is not.
+        thread or process; the concurrent coroutine (including anything after
+        it in a pipeline) is not.
         """
         results = self.QueueClass( )
         target = self > results.put
@@ -203,17 +208,18 @@ class QueueCoroutine ( coroutine ):
             while True:
                 try:
                     yield results.get( block=False )
-                except self.QueueEmpty:
+                except Queue.Empty:
                     break
         target.close()
+    __lt__ = asGenerator
 
-class coProcess ( QueueCoroutine ):
-    "QueueCoroutine using multiprocessing"
+class coProcess ( _queueCoroutine ):
+    "_queueCoroutine using multiprocessing"
     QueueClass      = staticmethod( multiprocessing.Queue   )
     ThreadOrProcess = staticmethod( multiprocessing.Process )
 
-class coThread ( QueueCoroutine ):
-    "QueueCoroutine using threading"
+class coThread ( _queueCoroutine ):
+    "_queueCoroutine using threading"
     QueueClass      = staticmethod( Queue.Queue      )
     ThreadOrProcess = staticmethod( threading.Thread )
 
@@ -225,7 +231,6 @@ def tee ( targetOne ):
             targetOne.send( value )
             targetTwo.send( value )
     return _tee
-
 
 def cfilter ( fn ):
     @coroutine

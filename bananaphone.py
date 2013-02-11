@@ -63,10 +63,10 @@ below) the unabridged model is adhered to about 90% of the time.
 
 EXAMPLE USAGE:
 encode "Hello\n" at 13 bits per word, using a dictionary and random picker:
-    echo Hello | ./bananaphone.py evaluate 'rh_encoder("words,sha1,13", "random", "/usr/share/dict/words")'
+    echo Hello | ./bananaphone.py rh_encoder words,sha1,13 random /usr/share/dict/words
 
 decode "Hello\n" from 13-bit words:
-    echo "discombobulate aspens brawler Gödel's" | ./bananaphone.py evaluate 'rh_decoder("words,sha1,13")'
+    echo "discombobulate aspens brawler Gödel's" | ./bananaphone.py rh_decoder words,sha1,13
 
 decode "Hello\n" from 13-bit words using the composable coroutine API:
     >>> "".join( str("discombobulate aspens brawler Gödel's\n") > rh_decoder("words,sha1,13") )
@@ -107,13 +107,17 @@ opinion that it is probably not possible to protect against them while
 maintaining low enough latency to estabish TCP connections.
 
 TODO:
+* better CLI
+* implement Tor pluggable transport spec
+* document hammertime usage
 * add stream cipher
 ** hammertime needs one to be at all useful. TLS would be fine.
 ** RH encoding needs an indistinguishable one to provide more than obfuscation.
-*** idea:
-* document hammertime usage
-* better CLI
-* implement Tor pluggable transport spec
+*** possible idea for indistinguishable handshake: each side sends its public
+key followed by random data until it receives the other side's public key, some
+arbitrary amount of random data, and a "begin" message encrypted to it
+(indicating that the other side has received its key and will begin
+transmitting encrypted data).
 """
 
 __author__    = "Leif Ryge <leif@synthesize.us>"
@@ -131,56 +135,59 @@ from dryopt      import Command, Option
 HASHES  = [ md5, sha1, sha224, sha256, sha384, sha512 ]
 GLOBALS = globals()
 
-global verbose
+global verbose 
 verbose = False
-
-def getGlobalOfType( typeWanted ):
-    def getter ( name, default = None ):
-        result = globals().get( name, default )
-        assert isinstance( result, typeWanted ), "'%s' is not one of %s" % ( name, listGlobalsOfType( typeWanted ) )
-        return result
-    return getter
-
-def listGlobalsOfType( typeWanted ):
-    return [ k for k,v in globals().items() if isinstance(v, typeWanted ) ]
-
-class Pipeline( Command ):
-    def commandline_call( self, args ):
-        coroutine = Command.commandline_call( self, args )
-        stdout = os.fdopen(sys.stdout.fileno(), 'w', 0) # do not want buffering
-        stdin  = os.fdopen(sys.stdin .fileno(), 'r', 0) # do not want buffering
-        target = coroutine > stdout.write
-        for byte in iter( lambda: stdin.read(1), '' ):
-            target.send( byte )
-        target.close()
-
-@Pipeline
-def evaluate ( expression=Option( parse=str, help="expression to evaluate" ) ):
-    "Evaluate an expression and run it as a pipeline between standard in and out"
-    return eval( expression )
-
+# FIXME: should use logging module instead of this
 def debug ( message ):
     if verbose:
         sys.stderr.write( "%s\n" % (message,) )
     return message
 
+def listGlobalsOfType( typeWanted ):
+    return [ k for k,v in globals().items() if isinstance(v, typeWanted ) ]
+
+def getGlobalOfType( typeWanted ):
+    def getter ( name, default = None ):
+        result = globals().get( name, default )
+        if isinstance( result, typeWanted ):
+            return result
+        else:
+            raise TypeError(
+                "'%s' is not an instance of %s. Valid options: %s" % (
+                    name, typeWanted.__name__,
+                    ", ".join( listGlobalsOfType( typeWanted ) ) ) )
+    return getter
+
+class PipeCommand( Command ):
+    """
+    This decorates functions returning coroutines which accept and send strings.
+    commandline_call connects standard in to standard out via the coroutine.
+    """
+    def commandline_call( self, args ):
+        coroutine = Command.commandline_call( self, args )
+        stdout    = os.fdopen(sys.stdout.fileno(), 'w', 0) # do not want buffering
+        stdin     = os.fdopen(sys.stdin .fileno(), 'r', 0) # do not want buffering
+        target    = coroutine > stdout.write
+        for byte in iter( lambda: stdin.read(1), '' ):
+            target.send( byte )
+        target.close()
+
+@PipeCommand
+def evaluate ( expression=Option( parse=str, help="expression to evaluate" ) ):
+    """
+    Evaluate an expression which returns a coroutine which accepts and sends strings.
+    """
+    return eval( expression )
+
 def formatGlobalNames ( objectList ):
     return "<%s>" % ( "|".join( k for k,v in GLOBALS.items() if v in objectList ), )
 
-def register( registry, name ):
-    def decorator( function ):
-        registry[ name ] = function
-        return function
-    return decorator
-
 def appendTo ( objectList ):
+    # FIXME: get rid of all use of this
     def decorator( function ):
         objectList.append( function )
         return function
     return decorator
-
-def mergeDicts ( *dicts ):
-    return reduce( lambda a, b: a.update(b) or a, dicts, {} )
 
 
 def changeWordSize ( inSize, outSize ):
@@ -338,7 +345,7 @@ def truncateHash ( hash, bits ):
 def parseEncodingSpec ( encodingSpec ):
 
     if type( encodingSpec ) is tuple:
-        debug("parseEncodingSpec passing through tuple: %s" % encodingSpec)
+        debug("parseEncodingSpec passing through tuple: %s" % (encodingSpec,) )
         return encodingSpec
     
     tokenize, hash, bits = encodingSpec.split(",", 3)
@@ -397,16 +404,14 @@ words2 = appendTo(TOKENIZERS)( streamTokenizer( " \n.,;?!" ) )
 words3 = appendTo(TOKENIZERS)( streamTokenizer( " \n.,;?!" )
                                | cmap( lambda word: word[:-1]+' ' if word.endswith("\n") and not word == "\n" else word ) )
 
+class Model ( coroutine ): pass
 
-MODELS = []
-
-@appendTo(Model)
-@Command
+@Model
 def markov (
-        encodingSpec = Option( parse = parseEncodingSpec ),
-        corpusFile   = Option( parse = readTextFile      ),
-        order        = Option( default = 1               ),
-        abridged     = Option( parse = bool, default = False )
+        encodingSpec ,
+        corpusFile   ,
+        order        = 1 ,
+        abridged     = False ,
         ):
     tokenize, hash, bits = encodingSpec
     truncatedHash = truncateHash( hash, bits )
@@ -433,15 +438,18 @@ def markov (
 
     prevList = [ None ]
 
-    def encode ( value ):
+    value = yield
 
+    while True:
         prevTuple = tuple( prevList )
         stats.total += 1
+        
+        modelForValue = model.get(prevTuple, {}).get(value, {})
 
-        if prevTuple in model and value in model[ prevTuple ] and len(model[ prevTuple ][ value ]):
+        if len( modelForValue ):
             stats.adhered += 1
             choices = []
-            for token, count in model[ prevTuple ][ value ].items():
+            for token, count in modelForValue.items():
                 choices.extend( [token] * count )
         
         else:
@@ -457,48 +465,41 @@ def markov (
         if not stats.total % 10**5:
             debug( "%s words encoded, %s%% adhering to model" % ( stats.total, (100.0* stats.adhered / stats.total ) ) )
 
-        return nextWord
+        value = yield nextWord
 
-    return encode
-
-
-@appendTo(MODELS)
-def random ( tokenize, hash, bits, corpusFile ):
-
+@Model
+def random ( (tokenize, hash, bits), corpusFile ):
     truncatedHash = truncateHash( hash, bits )
     corpusTokens  = list( tokenize < readTextFile( corpusFile ) )
     model         = buildWeightedRandomModel( corpusTokens, truncatedHash )
     percentFull   = getPercentFull( model, bits )
     assert percentFull == 100, "not enough tokens for %s-bit hashing (%s%% there)" % (bits, percentFull)
-    
     debug( "built weighted random model from %s tokens (%s unique)" % ( len(corpusTokens), len(set(corpusTokens)) ) )
+    value = yield
+    while True:
+        value = yield choice( model[ value ] )
+ 
 
-    def encode( value ):
-        return choice( model[ value ] )
-    
-    return encode
-
-
-@Pipeline
-def rh_decoder ( encodingSpec ):
-    tokenize, hash, bits = parseEncodingSpec( encodingSpec )
+@PipeCommand
+def rh_decoder ( encodingSpec = Option( parse=parseEncodingSpec ) ):
+    tokenize, hash, bits = encodingSpec
     return toBytes | tokenize | cmap( truncateHash( hash, bits ) ) | changeWordSize( bits, 8 ) | cmap( chr )
 
 
-@Pipeline
+@PipeCommand
 def rh_encoder (
-        encodingSpec = Option( parse = str          ),
-        model        = Option( parse = GLOBALS.get  ),
-        *args
+        encodingSpec = Option(
+            parse = parseEncodingSpec ,
+            help = "Encoding specification"
+            ),
+        model = Option(
+            parse = getGlobalOfType( Model ),
+            help  = "Encoding model to use."
+            ),
+        *modelArgs
         ):
-
-    tokenize, hash, bits = parseEncodingSpec( encodingSpec )
-
-    model = GLOBALS.get( modelName )
-    assert model in MODELS, "model must be one of %s, got %s" % ( formatGlobalNames( MODELS ), modelName )
-
-    encode = model( encodingSpec, *args )
-    
+    tokenize, hash, bits = encodingSpec
+    encode = model( encodingSpec, *modelArgs ).send
     return toBytes | cmap(ord) | changeWordSize(8, bits) | cmap(encode)
 
 COMMANDS = {}
@@ -548,8 +549,8 @@ def rh_print_corpus_stats (
         ):
 
     """
-    Print the maximum number of RH encoding bits per token possible for a given
-    corpus and encoding spec using both markov and random models.
+    Print the maximum number of RH-encoded bits-per-token are possible for a
+    given corpus and encoding spec using both markov and random models.
     """
 
     tokenize, hash, bits = encodingSpec
@@ -576,11 +577,12 @@ def rh_print_corpus_stats (
             break
 
 
-@Pipeline
+@PipeCommand
 def hammertime_encoder():
     """
     Adds chaff to a bytestream to impede passive timing analysis.
     """
+    from Queue import Empty
     @coThread.withQueueAccess
     def _hammertime_encoder( queue, target ):
         while True:
@@ -594,7 +596,7 @@ def hammertime_encoder():
                         break
                     else:
                         data.append( value )
-                except coThread.QueueEmpty:
+                except Empty:
                     break
             dataLen = len( data )
             while dataLen > 0:
@@ -608,7 +610,7 @@ def hammertime_encoder():
                 break
     return _hammertime_encoder
 
-@Pipeline
+@PipeCommand
 def hammertime_decoder():
     """
     Removes hammertime_encoder's chaff.
@@ -692,11 +694,11 @@ def httpd_chooser (
     HTTPServer( serverAddress, RequestHandler ).serve_forever()
 
 
-@register( COMMANDS, 'tab_composer' )
+@Command
 def tab_composer ( 
-            encodingSpec   = 'words,sha1,2',
-            corpusFile = 'corpus.txt',
-            order          = 1,
+            encodingSpec   = Option( parse=parseEncodingSpec, default = 'words,sha1,2' ),
+            corpusFile     = Option( parse=readTextFile, default = 'corpus.txt' ),
+            order          = Option( default=1 ),
             ):
     """readline tab completion through a markov model encoder"""
     inputData = sys.stdin.read()
@@ -716,7 +718,8 @@ def tab_composer (
     debug( "Scaling input data" )
     scaledData    = list( changeWordSize( map( ord, inputData ), 8, bits ) )
 
-#    markovModel[()] = mergeDicts( *markovModel.values() )
+#   merge all to make starting state:
+#    markovModel[()] = reduce( lambda a, b: a.update(b) or a, markovModel.values(), {} )
 
     def completer ( text, stateN ):
         try:
@@ -811,6 +814,10 @@ def tcp_proxy (
         *args
         ):
 
+    """
+    TCP Proxy Codec Server
+    """
+    
     from twisted.protocols import basic
     from twisted.internet  import reactor, protocol, defer
 
