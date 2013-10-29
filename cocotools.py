@@ -176,8 +176,10 @@ class QueueCoroutine ( coroutine ):
         iterable. The sending and receiving iterables operate in the calling
         process; the concurrent coroutine (including anything after it in a
         pipeline) is not.
+
+        Queue size is arbitrarily set at 100 (FIXME: expose this to lib users)
         """
-        results = self.Queue( )
+        results = self.Queue( 100 )
         target = self > results.put
         for value in iterable:
             target.send( value )

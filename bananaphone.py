@@ -75,11 +75,15 @@ decode "Hello\n" from 13-bit words using the composable coroutine API:
 start a proxy listener for $sshhost, using markov encoder with 2 bits per word:
     socat TCP4-LISTEN:1234,fork EXEC:'bash -c "./bananaphone.py\\ pipeline\\ rh_decoder(words,sha1,2)|socat\\ TCP4\:'$sshhost'\:22\\ -|./bananaphone.py\\ -v\\ rh_encoder\\ words,sha1,2\\ markov\\ corpus.txt"' # FIXME: shell quoting is broken in this example usage after moving to the pipeline model
 
-same as above, but using bananaphone.tcp_proxy instead of socat as the server:
-    python -m bananaphone tcp_proxy rh_server words,sha1,2 markov corpus.txt
-
 connect to the ssh host through the $proxyhost:
     ssh user@host -oProxyCommand="./bananaphone.py pipeline 'rh_encoder((words,sha1,2),\"markov\",\"corpus.txt\")'|socat TCP4:$proxyhost:1234 -|./bananaphone.py pipeline 'rh_decoder((words,sha1,2))'"
+
+same as above, but using bananaphone.tcp_proxy instead of socat as the server:
+    server:
+        python -m bananaphone tcp_proxy 1234 localhost:22 rh_server words,sha1,2 markov corpus.txt
+
+    client:
+        ssh user@host -oProxyCommand="python -m bananaphone tcp_client $proxyhost:1234 rh_client words,sha1,2 markov corpus.txt"
 
 === Hammertime encoding ===
 
@@ -740,18 +744,8 @@ class usage ( composable ):
                 raise
         composable.__init__( self, _command )
 
+def _buildTwistedProxyProtocolFactory( destHostPort, codecName, *args ):
 
-@register( COMMANDS, 'tcp_proxy' )
-@usage
-def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
-    """
-    listenPort   - TCP port number to listen on
-    destHostPort - host:port to connect to
-    codecName    - name of encoder/decoder pair to use
-    codecArgs    - codec parameters
-    """
-
-    from twisted.protocols import basic
     from twisted.internet  import reactor, protocol, defer
 
     def callFromThreadWrapper( fn ):
@@ -820,9 +814,35 @@ def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
     codec = GLOBALS.get( codecName )
     assert codec in CODECS, "codec must be one of %s, got %s" % ( formatGlobalNames( CODECS ), codecName )
     
-    reactor.listenTCP( int(listenPort), ProxyServerFactory( destHostPort, codec(*args) ) )
+    return ProxyServerFactory( destHostPort, codec(*args) )
+
+
+@register( COMMANDS, 'tcp_proxy' )
+@usage
+def tcp_proxy ( listenPort, destHostPort, codecName, *args ):
+    """
+    listenPort   - TCP port number to listen on
+    destHostPort - host:port to connect to
+    codecName    - name of encoder/decoder pair to use
+    codecArgs    - codec parameters
+    """
+    from twisted.internet import reactor
+    factory = _buildTwistedProxyProtocolFactory( destHostPort, codecName, *args )
+    reactor.listenTCP( int(listenPort), factory )
     reactor.run()
 
+@register( COMMANDS, 'tcp_client' )
+@usage
+def tcp_client ( destHostPort, codecName, *args ):
+    """
+    destHostPort - host:port to connect to
+    codecName    - name of encoder/decoder pair to use
+    codecArgs    - codec parameters
+    """
+    from twisted.internet import reactor, stdio
+    factory = _buildTwistedProxyProtocolFactory( destHostPort, codecName, *args )
+    stdio.StandardIO( factory.buildProtocol(None) )
+    reactor.run()
 
 @register( COMMANDS, 'test' )
 def test( verbose=None ):
