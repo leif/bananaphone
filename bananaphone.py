@@ -760,6 +760,7 @@ def _buildTwistedProxyProtocolFactory( destHostPort, codecName, *args ):
 
         def connectionLost(self, why):
             debug( "Connection lost." )
+            self.byteSink.close()
             self.loseRemoteConnection()
 
 

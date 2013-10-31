@@ -155,7 +155,7 @@ class QueueCoroutine ( coroutine ):
                             break
                         target.send( value )
             def _queueWriter ( target ):
-                queue = self.Queue( 1000 )
+                queue = self.Queue( 10 )
                 p = self.ThreadOrProcess( target=_queueReader, args=(queue, target) )
                 p.start()
                 while True:
@@ -176,10 +176,8 @@ class QueueCoroutine ( coroutine ):
         iterable. The sending and receiving iterables operate in the calling
         process; the concurrent coroutine (including anything after it in a
         pipeline) is not.
-
-        Queue size is arbitrarily set at 100 (FIXME: expose this to lib users)
         """
-        results = self.Queue( 100 )
+        results = self.Queue( 10 )
         target = self > results.put
         for value in iterable:
             target.send( value )
