@@ -754,7 +754,8 @@ class usage ( composable ):
             try:
                 return fn( *args, **kwargs )
             except TypeError:
-                print fn.__doc__.format(globals=globals())
+                if fn.__doc__ is not None:
+                    print fn.__doc__.format(globals=globals())
                 raise
         composable.__init__( self, _command )
 
