@@ -199,12 +199,22 @@ def changeWordSize ( inSize, outSize ):
     return _changeWordSize
 
 
-def buildWeightedRandomModel ( corpusTokens, hash ):
+def buildWeightedRandomModel ( corpusTokens, hash, shortest = False ):
     model = {}
-    for token in corpusTokens:
-        model.setdefault( hash( token ), [] ).append( token )
+    if not shortest:
+        for token in corpusTokens:
+            model.setdefault( hash( token ), [] ).append( token )
+    else:
+        for token in corpusTokens:
+            tokenValue = hash( token )
+            if tokenValue in model:
+                if len(model[tokenValue][0]) > len(token):
+                    model[tokenValue] = [ token ]
+                elif len(model[tokenValue][0]) == len(token):
+                    model[tokenValue].append( token )
+            else:
+                model[tokenValue] = [ token ]
     return model
-
 
 def ngram ( n ):
     """
@@ -429,11 +439,11 @@ def markov ( tokenize, hash, bits, corpusFilename, order=1, abridged=None ):
 
 
 @appendTo(MODELS)
-def random ( tokenize, hash, bits, corpusFilename ):
+def random ( tokenize, hash, bits, corpusFilename, shortest=False ):
 
     truncatedHash = truncateHash( hash, bits )
     corpusTokens  = list( tokenize < readTextFile( corpusFilename ) )
-    model         = buildWeightedRandomModel( corpusTokens, truncatedHash )
+    model         = buildWeightedRandomModel( corpusTokens, truncatedHash, shortest )
     percentFull   = getPercentFull( model, bits )
     assert percentFull == 100, "not enough tokens for %s-bit hashing (%s%% there)" % (bits, percentFull)
     
