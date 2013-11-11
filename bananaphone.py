@@ -621,7 +621,7 @@ def httpd_chooser ( encodingSpec   = 'words,sha1,12',
             self.send_response( 200 )
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            data = urlparse.parse_qs( self.path[2:] ).get( 'input' )
+            data = urlparse.parse_qs( self.path[2:] ).get( 'input' ) or [""]
             shortest = urlparse.parse_qs( self.path[2:] ).get( 'shortest' )
             html = """
 <html>
@@ -634,8 +634,10 @@ function update(){
 }
 </script>
 <body onload=update()>
-<form><input name=input type=text value="%s"><br>
-            """ % (data[0],)
+<tt>%s</tt> encoding from <tt>%s</tt> (%s tokens, %s unique)<hr>
+<form>Text to encode: <input name=input type=text value="%s"><hr>
+Select alternates:
+            """ % (encodingSpec, corpusFilename, len(corpusTokens), len(set(corpusTokens)), data[0])
             if data != None:
                 for word in changeWordSize( 8, bits ) < map( ord, data[0] ):
                     keyFunc = len if shortest else model[word].count
@@ -643,8 +645,8 @@ function update(){
                     for token in sorted( set(model[ word ]), key=keyFunc, reverse=(not shortest) ):
                         html += "<option value='%s'>%s</option>" % ( token, token )
                     html += "</select>"
-            self.wfile.write( html + "<br><textarea id=output cols=80 rows=5>" +
-                                     "</textarea><br><div id=length></div>\n" )
+            self.wfile.write( html + "<hr>Result (<span id=length></span> bytes):<br>" +
+                                     "<textarea id=output cols=80 rows=5></textarea><br>\n" )
     debug( "Listening on port %s" % (port,) )
     HTTPServer( serverAddress, RequestHandler ).serve_forever()
 
