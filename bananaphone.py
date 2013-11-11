@@ -621,15 +621,30 @@ def httpd_chooser ( encodingSpec   = 'words,sha1,12',
             self.send_response( 200 )
             self.send_header("Content-type", "text/html")
             self.end_headers()
-            html = "<html><form><input name=input type=text><br>"
             data = urlparse.parse_qs( self.path[2:] ).get( 'input' )
+            shortest = urlparse.parse_qs( self.path[2:] ).get( 'shortest' )
+            html = """
+<html>
+<script>
+function update(){
+    document.getElementById('output').value = Array.prototype.slice.call(
+        document.getElementsByTagName('select')).map(function (s) {
+            return s.options[s.selectedIndex].value }).join('');
+    document.getElementById('length').textContent = document.getElementById('output').value.length
+}
+</script>
+<body onload=update()>
+<form><input name=input type=text value="%s"><br>
+            """ % (data[0],)
             if data != None:
-                for word in changeWordSize( map( ord, data[0] ), 8, bits ):
-                    html += "<select>"
-                    for token in sorted( set(model[ word ]), key=model[word].count, reverse=True ):
-                        html += "<option>%s</option>" % ( token, )
+                for word in changeWordSize( 8, bits ) < map( ord, data[0] ):
+                    keyFunc = len if shortest else model[word].count
+                    html += "<select onchange=update()>"
+                    for token in sorted( set(model[ word ]), key=keyFunc, reverse=(not shortest) ):
+                        html += "<option value='%s'>%s</option>" % ( token, token )
                     html += "</select>"
-            self.wfile.write( html + "\n" )
+            self.wfile.write( html + "<br><textarea id=output cols=80 rows=5>" +
+                                     "</textarea><br><div id=length></div>\n" )
     debug( "Listening on port %s" % (port,) )
     HTTPServer( serverAddress, RequestHandler ).serve_forever()
 
