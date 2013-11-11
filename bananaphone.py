@@ -368,12 +368,16 @@ def streamTokenizer ( stopBytes ):
                 value = []
     return tokenizer
 
-
 words = streamTokenizer( " \n" ) \
         | cfilter( lambda token: token not in ( " ", "\n" ) ) \
         | cmap( lambda token: token.strip() + ' ' )
 appendTo(TOKENIZERS)( words )
 
+asciiwords = streamTokenizer( " \n" ) \
+        | cmap( lambda token: "".join(b for b in token if 0x20 <= ord(b) <= 0x7e) ) \
+        | cfilter( lambda token: token not in ( " ", "\n" ) ) \
+        | cmap( lambda token: token.strip() + ' ' )
+appendTo(TOKENIZERS)( asciiwords )
 
 lines  = appendTo(TOKENIZERS)( streamTokenizer( "\n" ) )
 words2 = appendTo(TOKENIZERS)( streamTokenizer( " \n.,;?!" ) )
