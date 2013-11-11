@@ -6,7 +6,8 @@ bananaphone.py - stream encoding toolkit
 The codecs implemented here are intended to eventually be usable as Tor
 pluggable transports, but this does not yet implement the pluggable transport
 specficiation. Currently these encoders can be used as shell pipelines and as a
-TCP proxy. (That is underway at https://github.com/david415/obfsproxy )
+TCP proxy. (Pluggable Transport support is now underway at
+https://github.com/david415/obfsproxy )
 
 === Reverse Hash Encoding ===
 
@@ -639,21 +640,23 @@ function update(){
             return s.options[s.selectedIndex].value }).join('');
     document.getElementById('length').textContent = document.getElementById('output').value.length
 }
+function submit() { document.getElementById('form').submit(); }
 </script>
 <body onload=update()>
 <tt>%s</tt> encoding from <tt>%s</tt> (%s tokens, %s unique)<hr>
-<form>Text to encode: <input name=input type=text value="%s"><hr>
+<form id=form>Text to encode: <input name=input type=text value="%s"><br>
+<small><input type=checkbox name=shortest %s onchange=submit()>Sort by length (instead of frequency)</small><hr>
 Select alternates:
-            """ % (encodingSpec, corpusFilename, len(corpusTokens), len(set(corpusTokens)), data[0])
+            """ % (encodingSpec, corpusFilename, len(corpusTokens), len(set(corpusTokens)), data[0], 'checked' if shortest else '')
             if data != None:
                 for word in changeWordSize( 8, bits ) < map( ord, data[0] ):
                     keyFunc = len if shortest else model[word].count
-                    html += "<select onchange=update()>"
+                    html += '<select onchange=update() title="%s words hash to value %s">' % (len(set(model[word])),word)
                     for token in sorted( set(model[ word ]), key=keyFunc, reverse=(not shortest) ):
                         html += "<option value='%s'>%s</option>" % ( token, token )
                     html += "</select>"
             self.wfile.write( html + "<hr>Result (<span id=length></span> bytes):<br>" +
-                                     "<textarea id=output cols=80 rows=5></textarea><br>\n" )
+                                     "<textarea id=output cols=80 rows=5></textarea><br>(pipe through <tt>python -mbananaphone pipeline 'rh_decoder(\"%s\")'</tt> to decode it)" % (encodingSpec,))
     debug( "Listening on port %s" % (port,) )
     HTTPServer( serverAddress, RequestHandler ).serve_forever()
 
