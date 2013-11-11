@@ -6,7 +6,7 @@ bananaphone.py - stream encoding toolkit
 The codecs implemented here are intended to eventually be usable as Tor
 pluggable transports, but this does not yet implement the pluggable transport
 specficiation. Currently these encoders can be used as shell pipelines and as a
-TCP proxy.
+TCP proxy. (That is underway at https://github.com/david415/obfsproxy )
 
 === Reverse Hash Encoding ===
 
@@ -85,10 +85,17 @@ same as above, but using bananaphone.tcp_proxy instead of socat as the server:
     client:
         ssh user@host -oProxyCommand="python -m bananaphone tcp_client $proxyhost:1234 rh_client words,sha1,2 markov corpus.txt"
 
+start a webserver at localhost:8000 with an interactive composition interface
+which shows all tokens available for encoding each word of input:
+    python -mbananaphone httpd_chooser asciiwords,sha1,8
+
 === Hammertime encoding ===
 
 This is a chaff layer intended to impede passive timing analysis. It should be
-layered underneath a stream cipher (not yet implemented here).
+layered underneath a stream cipher (not yet implemented here, probably should
+use obfs3?). WARNING: the current encoder implementation uses threads and has a
+bug which can cause it to rapidly consume all ram when used with the twisted
+wrappers (tcp_proxy, tcp_client).
 
 Threat models:
 Alice establishes a TCP connection to Bob via the Tor network.
@@ -112,10 +119,10 @@ maintaining low enough latency to estabish TCP connections.
 
 TODO:
 * add stream cipher
-** hammertime needs one to be at all useful. TLS would be fine.
-** RH encoding needs an indistinguishable one to provide more than obfuscation.
+** hammertime needs one to be at all useful.
+** RH encoding needs an indistinguishable stream under it to provide more than obfuscation. see obfs3, perhaps elligator
 * document hammertime usage
-* implement Tor pluggable transport spec
+* implement Tor pluggable transport spec (now underway!)
 """
 
 __author__    = "Leif Ryge <leif@synthesize.us>"
@@ -893,8 +900,6 @@ def main ( progname, command=None, *argv ):
         global verbose
         verbose = True
         command = argv.pop(0)
-
-#    command = GLOBALS.get( command, None )
 
     if command in COMMANDS:
 
