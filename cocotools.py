@@ -291,32 +291,3 @@ if __name__ == "__main__":
     import doctest
     doctest.testmod()
 
-# Simple composition function; maybe I should use this instead of all the
-# operator overloading jazz.
-compose = lambda fns: lambda a: reduce( lambda n,f: f(n), fs, a )
-
-# my original version of composable coroutines:
-#def composable ( fn ):
-#    """Function composition decorator
-#    Decorate functions with this so you can write
-#        a | b | c | d
-#    instead of
-#        lambda *args, **kwargs: a(b(c(d(*args,**kwargs))))
-#    """
-#    class _composable ( object ):
-#        def __call__ ( self, *args, **kwargs ):
-#            return fn( *args, **kwargs )
-#        def __or__ ( self, target ):
-#            @composable
-#            def composed ( *args, **kwargs ):
-#                return fn( target( *args, **kwargs ) )
-#            return composed
-#    return _composable()
-#def coroutine( fn ):
-#    def _coroutine ( *args, **kwargs ):
-#        g = fn( *args, **kwargs )
-#        g.next()
-#        return g
-#    return _coroutine
-# coco = composable( composable ) | coroutine
-
