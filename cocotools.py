@@ -5,8 +5,7 @@ concurrent composable coroutines
 """
 
 __author__    = "Leif Ryge <leif@synthesize.us>"
-__copyright__ = "No Rights Reserved, Uncopyright 2012"
-__license__   = "WTFPL"
+__license__   = "CC0 (Public Domain)"
  
 import os
 import sys

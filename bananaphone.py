@@ -127,7 +127,7 @@ TODO:
 """
 
 __author__    = "Leif Ryge <leif@synthesize.us>"
-__copyright__ = "No Rights Reserved, Uncopyright 2012"
+__license__   = "CC0 (Public Domain)"
 
 import os, sys, time, readline
 from random      import choice, randrange
