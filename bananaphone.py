@@ -419,35 +419,37 @@ def markov ( tokenize, hash, bits, corpusFilename, order=1, abridged=None ):
         total   = 0
         adhered = order - 1
 
-    prevList = [ None ]
+    def encodeFactory():
 
-    def encode ( value ):
+        prevList = [ None ]
 
-        prevTuple = tuple( prevList )
-        stats.total += 1
+        def encode ( value ):
 
-        if prevTuple in model and value in model[ prevTuple ] and len(model[ prevTuple ][ value ]):
-            stats.adhered += 1
-            choices = []
-            for token, count in model[ prevTuple ][ value ].items():
-                choices.extend( [token] * count )
-        
-        else:
-            choices = randomModel[ value ]
-        
-        nextWord = choice( choices )
+            prevTuple = tuple( prevList )
+            stats.total += 1
 
-        if stats.total >= order:
-            prevList.pop(0)
+            if prevTuple in model and value in model[ prevTuple ] and len(model[ prevTuple ][ value ]):
+                stats.adhered += 1
+                choices = []
+                for token, count in model[ prevTuple ][ value ].items():
+                    choices.extend( [token] * count )
+            
+            else:
+                choices = randomModel[ value ]
+            
+            nextWord = choice( choices )
 
-        prevList.append( nextWord )
+            if stats.total >= order:
+                prevList.pop(0)
 
-        if not stats.total % 10**5:
-            debug( "%s words encoded, %s%% adhering to model" % ( stats.total, (100.0* stats.adhered / stats.total ) ) )
+            prevList.append( nextWord )
 
-        return nextWord
+            if not stats.total % 10**5:
+                debug( "%s words encoded, %s%% adhering to model" % ( stats.total, (100.0* stats.adhered / stats.total ) ) )
 
-    return encode
+            return nextWord
+        return encode
+    return encodeFactory
 
 
 @appendTo(MODELS)
@@ -461,10 +463,11 @@ def random ( tokenize, hash, bits, corpusFilename, shortest=False ):
     
     debug( "built weighted random model from %s tokens (%s unique)" % ( len(corpusTokens), len(set(corpusTokens)) ) )
 
-    def encode( value ):
-        return choice( model[ value ] )
-    
-    return encode
+    def encodeFactory():
+        def encode( value ):
+            return choice( model[ value ] )
+        return encode
+    return encodeFactory
 
 
 PIPELINES = []
@@ -483,9 +486,25 @@ def rh_encoder ( encodingSpec, modelName, *args ):
     model = GLOBALS.get( modelName )
     assert model in MODELS, "model must be one of %s, got %s" % ( formatGlobalNames( MODELS ), modelName )
 
-    encode = model( tokenize, hash, bits, *args )
+    encode = model( tokenize, hash, bits, *args )()
     
     return toBytes | cmap(ord) | changeWordSize(8, bits) | cmap(encode)
+
+
+def rh_build_encoder_factory ( encodingSpec, modelName, *args ):
+
+    tokenize, hash, bits = parseEncodingSpec( encodingSpec )
+
+    model = GLOBALS.get( modelName )
+    assert model in MODELS, "model must be one of %s, got %s" % ( formatGlobalNames( MODELS ), modelName )
+
+    encodeFactory = model( tokenize, hash, bits, *args )
+
+    def encoderFactory():
+        encode = encodeFactory()
+        return toBytes | cmap(ord) | changeWordSize(8, bits) | cmap(encode)
+
+    return encoderFactory
 
 COMMANDS = {}
 
@@ -503,7 +522,7 @@ def rh_encoder_permuter ( encodingSpec, modelName, corpusFilename, separator="0a
     
     corpusTokens = list( tokenize < readTextFile( corpusFilename ) )
 
-    encode = model( corpusTokens, truncatedHash, bits, *args )
+    encode = model( corpusTokens, truncatedHash, bits, *args )()
 
     def process ( byteStream ):
         scaledWords = list( changeWordSize( map( ord, byteStream ), 8, bits ) )
