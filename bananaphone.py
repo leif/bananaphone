@@ -5,7 +5,7 @@ bananaphone.py - stream encoding toolkit
 
 The codecs implemented here are intended to eventually be usable as Tor
 pluggable transports, but this does not yet implement the pluggable transport
-specficiation. Currently these encoders can be used as shell pipelines and as a
+specification. Currently these encoders can be used as shell pipelines and as a
 TCP proxy. (Pluggable Transport support is now underway at
 https://github.com/david415/obfsproxy )
 
